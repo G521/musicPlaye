@@ -1,0 +1,408 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+""" Chunk is a subclass of dict with attribute-style access.
+
+    >>> b = Chunk()
+    >>> b.hello = 'world'
+    >>> b.hello
+    'world'
+    >>> b['hello'] += "!"
+    >>> b.hello
+    'world!'
+    >>> b.foo = Chunk(lol=True)
+    >>> b.foo.lol
+    True
+    >>> b.foo is b['foo']
+    True
+
+    It is safe to import * from this module:
+
+        __all__ = ('Chunk', 'chunkify','unchunkify')
+
+    un/chunkify provide dictionary conversion; Chunkes can also be
+    converted via Chunk.to/fromDict().
+"""
+
+__version__ = '2.0.0'
+VERSION = tuple(map(int, __version__.split('.')))
+
+__all__ = ('Chunk', 'chunkify','unchunkify',)
+
+from .python3_compat import *
+
+class Chunk(dict):
+    """ A dictionary that provides attribute-style access.
+
+        >>> b = Chunk()
+        >>> b.hello = 'world'
+        >>> b.hello
+        'world'
+        >>> b['hello'] += "!"
+        >>> b.hello
+        'world!'
+        >>> b.foo = Chunk(lol=True)
+        >>> b.foo.lol
+        True
+        >>> b.foo is b['foo']
+        True
+
+        A Chunk is a subclass of dict; it supports all the methods a dict does...
+
+        >>> sorted(b.keys())
+        ['foo', 'hello']
+
+        Including update()...
+
+        >>> b.update({ 'ponies': 'are pretty!' }, hello=42)
+        >>> print (repr(b))
+        Chunk(foo=Chunk(lol=True), hello=42, ponies='are pretty!')
+
+        As well as iteration...
+
+        >>> [ (k,b[k]) for k in b ]
+        [('ponies', 'are pretty!'), ('foo', Chunk(lol=True)), ('hello', 42)]
+
+        And "splats".
+
+        >>> "The {knights} who say {ni}!".format(**Chunk(knights='lolcats', ni='can haz'))
+        'The lolcats who say can haz!'
+
+        See unchunkify/Chunk.toDict, chunkify/Chunk.fromDict for notes about conversion.
+    """
+
+    def __contains__(self, k):
+        """ >>> b = Chunk(ponies='are pretty!')
+            >>> 'ponies' in b
+            True
+            >>> 'foo' in b
+            False
+            >>> b['foo'] = 42
+            >>> 'foo' in b
+            True
+            >>> b.hello = 'hai'
+            >>> 'hello' in b
+            True
+            >>> b[None] = 123
+            >>> None in b
+            True
+            >>> b[False] = 456
+            >>> False in b
+            True
+        """
+        try:
+            return dict.__contains__(self, k) or hasattr(self, k)
+        except:
+            return False
+
+    # only called if k not found in normal places
+    def __getattr__(self, k):
+        """ Gets key if it exists, otherwise throws AttributeError.
+
+            nb. __getattr__ is only called if key is not found in normal places.
+
+            >>> b = Chunk(bar='baz', lol={})
+            >>> b.foo
+            Traceback (most recent call last):
+                ...
+            AttributeError: foo
+
+            >>> b.bar
+            'baz'
+            >>> getattr(b, 'bar')
+            'baz'
+            >>> b['bar']
+            'baz'
+
+            >>> b.lol is b['lol']
+            True
+            >>> b.lol is getattr(b, 'lol')
+            True
+        """
+        try:
+            # Throws exception if not in prototype chain
+            return object.__getattribute__(self, k)
+        except AttributeError:
+            try:
+                return self[k]
+            except KeyError:
+                raise AttributeError(k)
+
+    def __setattr__(self, k, v):
+        """ Sets attribute k if it exists, otherwise sets key k. A KeyError
+            raised by set-item (only likely if you subclass Chunk) will
+            propagate as an AttributeError instead.
+
+            >>> b = Chunk(foo='bar', this_is='useful when subclassing')
+            >>> b.values                            #doctest: +ELLIPSIS
+            <built-in method values of Chunk object at 0x...>
+            >>> b.values = 'uh oh'
+            >>> b.values
+            'uh oh'
+            >>> b['values']
+            Traceback (most recent call last):
+                ...
+            KeyError: 'values'
+        """
+        try:
+            # Throws exception if not in prototype chain
+            object.__getattribute__(self, k)
+        except AttributeError:
+            try:
+                self[k] = v
+            except:
+                raise AttributeError(k)
+        else:
+            object.__setattr__(self, k, v)
+
+    def __delattr__(self, k):
+        """ Deletes attribute k if it exists, otherwise deletes key k. A KeyError
+            raised by deleting the key--such as when the key is missing--will
+            propagate as an AttributeError instead.
+
+            >>> b = Chunk(lol=42)
+            >>> del b.values
+            Traceback (most recent call last):
+                ...
+            AttributeError: 'Chunk' object attribute 'values' is read-only
+            >>> del b.lol
+            >>> b.lol
+            Traceback (most recent call last):
+                ...
+            AttributeError: lol
+        """
+        try:
+            # Throws exception if not in prototype chain
+            object.__getattribute__(self, k)
+        except AttributeError:
+            try:
+                del self[k]
+            except KeyError:
+                raise AttributeError(k)
+        else:
+            object.__delattr__(self, k)
+
+    def toDict(self):
+        """ Recursively converts a chunk back into a dictionary.
+
+            >>> b = Chunk(foo=Chunk(lol=True), hello=42, ponies='are pretty!')
+            >>> b.toDict()
+            {'ponies': 'are pretty!', 'foo': {'lol': True}, 'hello': 42}
+
+            See unchunkify for more info.
+        """
+        return unchunkify(self)
+
+    def __repr__(self):
+        """ Invertible* string-form of a Chunk.
+
+            >>> b = Chunk(foo=Chunk(lol=True), hello=42, ponies='are pretty!')
+            >>> print (repr(b))
+            Chunk(foo=Chunk(lol=True), hello=42, ponies='are pretty!')
+            >>> eval(repr(b))
+            Chunk(foo=Chunk(lol=True), hello=42, ponies='are pretty!')
+
+            (*) Invertible so long as collection contents are each repr-invertible.
+        """
+        keys = list(iterkeys(self))
+        keys.sort()
+        args = ', '.join(['%s=%r' % (key, self[key]) for key in keys])
+        return '%s(%s)' % (self.__class__.__name__, args)
+
+    @staticmethod
+    def fromDict(d):
+        """ Recursively transforms a dictionary into a Chunk via copy.
+
+            >>> b = Chunk.fromDict({'urmom': {'sez': {'what': 'what'}}})
+            >>> b.urmom.sez.what
+            'what'
+
+            See chunkify for more info.
+        """
+        return chunkify(d)
+
+
+
+# While we could convert abstract types like Mapping or Iterable, I think
+# chunkify is more likely to "do what you mean" if it is conservative about
+# casting (ex: isinstance(str,Iterable) == True ).
+#
+# Should you disagree, it is not difficult to duplicate this function with
+# more aggressive coercion to suit your own purposes.
+
+def chunkify(x):
+    """ Recursively transforms a dictionary into a Chunk via copy.
+
+        >>> b = chunkify({'urmom': {'sez': {'what': 'what'}}})
+        >>> b.urmom.sez.what
+        'what'
+
+        chunkify can handle intermediary dicts, lists and tuples (as well as
+        their subclasses), but ymmv on custom datatypes.
+
+        >>> b = chunkify({ 'lol': ('cats', {'hah':'i win again'}),
+        ...         'hello': [{'french':'salut', 'german':'hallo'}] })
+        >>> b.hello[0].french
+        'salut'
+        >>> b.lol[1].hah
+        'i win again'
+
+        nb. As dicts are not hashable, they cannot be nested in sets/frozensets.
+    """
+    if isinstance(x, dict):
+        return Chunk( (k, chunkify(v)) for k,v in iteritems(x) )
+    elif isinstance(x, (list, tuple)):
+        return type(x)( chunkify(v) for v in x )
+    else:
+        return x
+
+def unchunkify(x):
+    """ Recursively converts a Chunk into a dictionary.
+
+        >>> b = Chunk(foo=Chunk(lol=True), hello=42, ponies='are pretty!')
+        >>> unchunkify(b)
+        {'ponies': 'are pretty!', 'foo': {'lol': True}, 'hello': 42}
+
+        unchunkify will handle intermediary dicts, lists and tuples (as well as
+        their subclasses), but ymmv on custom datatypes.
+
+        >>> b = Chunk(foo=['bar', Chunk(lol=True)], hello=42,
+        ...         ponies=('are pretty!', Chunk(lies='are trouble!')))
+        >>> unchunkify(b) #doctest: +NORMALIZE_WHITESPACE
+        {'ponies': ('are pretty!', {'lies': 'are trouble!'}),
+         'foo': ['bar', {'lol': True}], 'hello': 42}
+
+        nb. As dicts are not hashable, they cannot be nested in sets/frozensets.
+    """
+    if isinstance(x, dict):
+        return dict( (k, unchunkify(v)) for k,v in iteritems(x) )
+    elif isinstance(x, (list, tuple)):
+        return type(x)( unchunkify(v) for v in x )
+    else:
+        return x
+
+
+### Serialization
+
+try:
+    try:
+        import json
+    except ImportError:
+        import simplejson as json
+
+    def toJSON(self, **options):
+        """ Serializes this Chunk to JSON. Accepts the same keyword options as `json.dumps()`.
+
+            >>> b = Chunk(foo=Chunk(lol=True), hello=42, ponies='are pretty!')
+            >>> json.dumps(b)
+            '{"ponies": "are pretty!", "foo": {"lol": true}, "hello": 42}'
+            >>> b.toJSON()
+            '{"ponies": "are pretty!", "foo": {"lol": true}, "hello": 42}'
+        """
+        return json.dumps(self, **options)
+
+    Chunk.toJSON = toJSON
+
+except ImportError:
+    pass
+
+
+
+
+try:
+    # Attempt to register ourself with PyYAML as a representer
+    import yaml
+    from yaml.representer import Representer, SafeRepresenter
+
+    def from_yaml(loader, node):
+        """ PyYAML support for Chunkes using the tag `!chunk` and `!chunk.Chunk`.
+
+            >>> import yaml
+            >>> yaml.load('''
+            ... Flow style: !chunk.Chunk { Clark: Evans, Brian: Ingerson, Oren: Ben-Kiki }
+            ... Block style: !chunk
+            ...   Clark : Evans
+            ...   Brian : Ingerson
+            ...   Oren  : Ben-Kiki
+            ... ''') #doctest: +NORMALIZE_WHITESPACE
+            {'Flow style': Chunk(Brian='Ingerson', Clark='Evans', Oren='Ben-Kiki'),
+             'Block style': Chunk(Brian='Ingerson', Clark='Evans', Oren='Ben-Kiki')}
+
+            This module registers itself automatically to cover both Chunk and any
+            subclasses. Should you want to customize the representation of a subclass,
+            simply register it with PyYAML yourself.
+        """
+        data = Chunk()
+        yield data
+        value = loader.construct_mapping(node)
+        data.update(value)
+
+
+    def to_yaml_safe(dumper, data):
+        """ Converts Chunk to a normal mapping node, making it appear as a
+            dict in the YAML output.
+
+            >>> b = Chunk(foo=['bar', Chunk(lol=True)], hello=42)
+            >>> import yaml
+            >>> yaml.safe_dump(b, default_flow_style=True)
+            '{foo: [bar, {lol: true}], hello: 42}\\n'
+        """
+        return dumper.represent_dict(data)
+
+    def to_yaml(dumper, data):
+        """ Converts Chunk to a representation node.
+
+            >>> b = Chunk(foo=['bar', Chunk(lol=True)], hello=42)
+            >>> import yaml
+            >>> yaml.dump(b, default_flow_style=True)
+            '!chunk.Chunk {foo: [bar, !chunk.Chunk {lol: true}], hello: 42}\\n'
+        """
+        return dumper.represent_mapping(u('!chunk.Chunk'), data)
+
+
+    yaml.add_constructor(u('!chunk'), from_yaml)
+    yaml.add_constructor(u('!chunk.Chunk'), from_yaml)
+
+    SafeRepresenter.add_representer(Chunk, to_yaml_safe)
+    SafeRepresenter.add_multi_representer(Chunk, to_yaml_safe)
+
+    Representer.add_representer(Chunk, to_yaml)
+    Representer.add_multi_representer(Chunk, to_yaml)
+
+
+    # Instance methods for YAML conversion
+    def toYAML(self, **options):
+        """ Serializes this Chunk to YAML, using `yaml.safe_dump()` if
+            no `Dumper` is provided. See the PyYAML documentation for more info.
+
+            >>> b = Chunk(foo=['bar', Chunk(lol=True)], hello=42)
+            >>> import yaml
+            >>> yaml.safe_dump(b, default_flow_style=True)
+            '{foo: [bar, {lol: true}], hello: 42}\\n'
+            >>> b.toYAML(default_flow_style=True)
+            '{foo: [bar, {lol: true}], hello: 42}\\n'
+            >>> yaml.dump(b, default_flow_style=True)
+            '!chunk.Chunk {foo: [bar, !chunk.Chunk {lol: true}], hello: 42}\\n'
+            >>> b.toYAML(Dumper=yaml.Dumper, default_flow_style=True)
+            '!chunk.Chunk {foo: [bar, !chunk.Chunk {lol: true}], hello: 42}\\n'
+        """
+        opts = dict(indent=4, default_flow_style=False)
+        opts.update(options)
+        if 'Dumper' not in opts:
+            return yaml.safe_dump(self, **opts)
+        else:
+            return yaml.dump(self, **opts)
+
+    def fromYAML(*args, **kwargs):
+        return chunkify( yaml.load(*args, **kwargs) )
+
+    Chunk.toYAML = toYAML
+    Chunk.fromYAML = staticmethod(fromYAML)
+
+except ImportError:
+    pass
+
+
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()
+
